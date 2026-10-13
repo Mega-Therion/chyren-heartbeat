@@ -1,0 +1,42 @@
+name: watchdog
+on:
+  schedule:
+    - cron: "17 */2 * * *"
+  workflow_dispatch:
+    inputs:
+      simulate_age_hours:
+        description: "Test only: treat the heartbeat as this many hours old"
+        required: false
+        default: ""
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check heartbeat age and alert if stale
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_RY_CHAT_ID }}
+          SIM: ${{ inputs.simulate_age_hours }}
+        run: |
+          last=$(cat last_seen)
+          age=$(( ( $(date -u +%s) - $(date -u -d "$last" +%s) ) / 3600 ))
+          prefix=""
+          if [ -n "$SIM" ]; then age="$SIM"; prefix="TEST: "; fi
+          echo "heartbeat age: ${age} h (last ${last})"
+          msg=""
+          if [ "$age" -ge 9 ] && [ "$age" -lt 11 ]; then
+            msg="${prefix}PC heartbeat missing for ${age} h (last ${last} UTC). Log in so its services restart."
+          elif [ "$age" -ge 24 ] && [ $(( age % 24 )) -lt 2 ]; then
+            msg="${prefix}PC still silent: ${age} h since the last heartbeat (${last} UTC)."
+          fi
+          if [ -n "$msg" ]; then
+            code=$(curl -sS -o /dev/null -w "%{http_code}" "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TG_CHAT}" --data-urlencode "text=${msg}")
+            echo "alert sent: HTTP ${code}"
+            [ "$code" = "200" ]
+          else
+            echo "no alert"
+          fi
